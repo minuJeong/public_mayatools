@@ -1,0 +1,6 @@
+HOTSPOTS/
+Pythonic_Vector/
+*.pyc
+dist/
+ntools/
+rx3_viewer/
