@@ -12,14 +12,7 @@ from afb_stage import canvas
 reload(canvas)
 
 
-def build_mainwin():
-
-    mainwin = QtGui.QWidget()
-    mainwin.setWindowTitle("Canvas")
-    mainwin.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint)
-
-    mainlayout = QtGui.QVBoxLayout()
-
+def build_stage():
     stage_view = QtGui.QGraphicsView()
     stage_view.setRenderHints(
         QtGui.QPainter.Antialiasing |
@@ -28,7 +21,18 @@ def build_mainwin():
     stage.start()
 
     stage_view.setScene(stage)
-    mainlayout.addWidget(stage_view)
+    return stage_view
+
+
+def build_mainwin():
+
+    mainwin = QtGui.QWidget()
+    mainwin.setWindowTitle("Canvas")
+    mainwin.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint)
+
+    mainlayout = QtGui.QHBoxLayout()
+
+    mainlayout.addWidget(build_stage())
 
     mainwin.setLayout(mainlayout)
     return mainwin

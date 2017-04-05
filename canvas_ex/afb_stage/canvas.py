@@ -17,7 +17,7 @@ class FrameUpdater(object):
     """ Calls callback {N} times/sec """
 
     # static
-    FRAME_RATE = 60.
+    FRAME_RATE = 3.
     callbacks = []
     timers = []
 
@@ -26,9 +26,7 @@ class FrameUpdater(object):
 
     @staticmethod
     def reset():
-        for timer in FrameUpdater.timers:
-            timer.stop()
-
+        FrameUpdater.stop_all()
         FrameUpdater.timers = []
 
     @staticmethod
@@ -72,7 +70,7 @@ class FrameUpdater(object):
         if not FrameUpdater.timers:
             timer = QtCore.QTimer()
             timer.timeout.connect(FrameUpdater.update)
-            timer.setInterval(1000. / FrameUpdater.FRAME_RATE)
+            timer.setInterval(int(1000. / FrameUpdater.FRAME_RATE))
             timer.start()
 
             FrameUpdater.timers.append(timer)
@@ -86,8 +84,8 @@ class RigidBody(object):
     _wrap_rect = None
 
     # public
-    gravity = 0.98 * .45
-    bouncy = 0.7
+    gravity = 0.98 * .52
+    bouncy = 0.65
     floor_friction = 0.99
     collide_popout_exp = 0.5
 
@@ -96,8 +94,6 @@ class RigidBody(object):
 
     vx = 0.
     vy = 0.
-
-    collision_radius = 0.
 
     is_active = False
 
@@ -132,15 +128,19 @@ class RigidBody(object):
         self.vy += self.gravity * progress
 
     def _wrap_test(self):
+        # wrap y
         if self._y + self.vy > RigidBody._wrap_rect.bottom() - self.collision_radius:
             self.vy *= - self.bouncy
+            self._y = RigidBody._wrap_rect.bottom() - self.collision_radius
+
+            # apply friction while tumbling on floor
             self.vy *= self.floor_friction
             self.vx *= self.floor_friction
-            self._y = RigidBody._wrap_rect.bottom() - self.collision_radius
         elif self._y + self.vy < RigidBody._wrap_rect.top() + self.collision_radius:
             self.vy *= - self.bouncy
             self._y = RigidBody._wrap_rect.top() + self.collision_radius
 
+        # wrap x
         if self._x + self.vx < RigidBody._wrap_rect.left() + self.collision_radius:
             self.vx *= - self.bouncy
             self._x = RigidBody._wrap_rect.left() + self.collision_radius
@@ -155,16 +155,19 @@ class RigidBody(object):
 
             dx = self.x() - other.x()
             dy = self.y() - other.y()
+            d = math.sqrt(dx * dx + dy * dy)
             target_d = self.collision_radius + other.collision_radius
 
-            if (dx * dx + dy * dy) < (target_d * target_d):
+            if d < target_d:
                 angle = math.atan2(dy, dx)
+                rev_angle = angle + math.pi
 
-                self._x = other.x() + math.cos(angle) * target_d
-                self._y = other.y() + math.sin(angle) * target_d
+                self._x = other.x() + math.cos(angle) * target_d * 1.5
+                self._y = other.y() + math.sin(angle) * target_d * 1.5
 
-                self.vx += math.cos(angle) * self.collide_popout_exp
-                self.vy += math.sin(angle) * self.collide_popout_exp
+                self.push(
+                    math.cos(rev_angle) * d,
+                    math.sin(rev_angle) * d)
 
     def push(self, acc_x, acc_y):
         self.vx += acc_x
@@ -272,8 +275,8 @@ class Ball(RenderedEntity, RigidBody):
 class Stage(QtGui.QGraphicsScene):
     """ graphics item container """
 
-    WIDTH = 700
-    HEIGHT = 700
+    WIDTH = 400
+    HEIGHT = 400
 
     scene_rect = None
 
@@ -292,10 +295,10 @@ class Stage(QtGui.QGraphicsScene):
 
         RigidBody.reset(self.scene_rect)
 
-        self.spawn_new_ball(10)
-
         FrameUpdater.reset()
         FrameUpdater.add_update_listener(self._on_enter_frame)
+
+        self.spawn_new_ball(10)
 
         descriptions = [
             "space: continue for 2 seconds",
@@ -312,7 +315,7 @@ class Stage(QtGui.QGraphicsScene):
         for _ in range(count):
             init_x = random.random() * self.scene_rect.width()
             init_y = random.random() * self.scene_rect.height()
-            radius = random.random() * 5 + 5
+            radius = random.random() * 10 + 5
 
             acc_x = random.random() * 100 - 50
             acc_y = random.random() * 100 - 50
@@ -366,4 +369,4 @@ class Stage(QtGui.QGraphicsScene):
 
         # read another keys
         else:
-            print(e.key())
+            print("keyboard input: {}".format(e.key()))
