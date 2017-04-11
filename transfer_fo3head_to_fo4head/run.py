@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import math
 import json
 
 from maya import cmds
@@ -71,7 +72,7 @@ class FO3_SourceHandler(QtGui.QGroupBox):
         gc_l.setText(u"pid")
         gc_load_row_layout.addWidget(gc_l)
 
-        self.gc_assetid_le = QtGui.QLineEdit("51")
+        self.gc_assetid_le = QtGui.QLineEdit("4858")
         gc_load_row_layout.addWidget(self.gc_assetid_le)
 
         self.gc_load_btn = QtGui.QPushButton()
@@ -84,7 +85,9 @@ class FO3_SourceHandler(QtGui.QGroupBox):
         self.gc_unload_btn.clicked.connect(self.unload_gc_asset)
         gc_load_row_layout.addWidget(self.gc_unload_btn)
 
-        # Selected scene entity capturer
+        self.target_object_name_l = QtGui.QLabel()
+        self.mainlayout.addWidget(self.target_object_name_l)
+
         sel_obj_row = QtGui.QWidget()
         self.mainlayout.addWidget(sel_obj_row)
 
@@ -92,15 +95,8 @@ class FO3_SourceHandler(QtGui.QGroupBox):
         sel_obj_row_layout.setContentsMargins(0, 0, 0, 0)
         sel_obj_row.setLayout(sel_obj_row_layout)
 
-        sel_l = QtGui.QLabel()
-        sel_l.setText(u"선택")
-        sel_obj_row_layout.addWidget(sel_l)
-
-        self.target_object_name_l = QtGui.QLabel()
-        sel_obj_row_layout.addWidget(self.target_object_name_l)
-
         self.capture_selected_btn = QtGui.QPushButton()
-        self.capture_selected_btn.setText(u"업데이트")
+        self.capture_selected_btn.setText(u"선택된 오브젝트")
         self.capture_selected_btn.clicked.connect(self.update_selected)
         sel_obj_row_layout.addWidget(self.capture_selected_btn)
 
@@ -115,7 +111,7 @@ class FO3_SourceHandler(QtGui.QGroupBox):
         self.mainlayout.addWidget(self.toggle_hide_source_btn)
 
         # update current selection as default
-        self.update_selected()
+        self.load_gc_asset()
 
     def load_gc_asset(self, e=False):
         if not self.gc_assetid:
@@ -255,6 +251,7 @@ class FO4_TemplateHandler(QtGui.QGroupBox):
         self.mainlayout.addWidget(preview_loaded_widget)
 
         preview_loaded_layout = QtGui.QHBoxLayout()
+        preview_loaded_layout.setContentsMargins(0, 0, 0, 0)
         preview_loaded_widget.setLayout(preview_loaded_layout)
 
         self.preview_loaded_l = QtGui.QLabel()
@@ -284,6 +281,9 @@ class FO4_TemplateHandler(QtGui.QGroupBox):
         self.mainlayout.addWidget(self.toggle_hide_template_btn)
 
         self.setLayout(self.mainlayout)
+
+        # Debug
+        self.load_base_template()
 
     def load_base_template(self, e=False):
         current_selection = cmds.ls(sl=True)
@@ -327,7 +327,11 @@ class FO4_TemplateHandler(QtGui.QGroupBox):
 
     def ensure_unlock_target(self):
         if self.imported_nodes:
-            cmds.lockNode(self.imported_nodes, lock=False)
+            for node in self.imported_nodes:
+                if not cmds.ls(node):
+                    continue
+
+                cmds.lockNode(self.imported_nodes, lock=False)
 
 
 class LerpTool(object):
@@ -335,15 +339,20 @@ class LerpTool(object):
     leave this class as static
     """
 
-    bottom_vtx_list = \
-        [2, 3, 4, 5, 8, 9, 12, 13, 14, 16, 17, 18, 20, 22, 24, 26, 27, 29] + \
-        [31, 32, 36, 38, 40, 42, 44, 45, 48, 49, 55, 57, 179, 180, 184, 187] + \
-        [190, 193, 194, 195, 197, 198, 199, 200, 201, 203, 209, 210, 215] + \
-        [236, 237, 238, 239, 296, 301, 317, 328, 329, 330, 334]
-
     @staticmethod
-    def get_ignore_list():
-        return LerpTool.bottom_vtx_list
+    def _get_ignore_list():
+        """
+        get-only list
+         - bottom edge vertices
+        """
+
+        return \
+            [2, 3, 4, 5, 8, 9, 12, 13, 14, 16, 17, 18, 20, 22, 24, 26, 27, 29,
+             31, 32, 36, 38, 40, 42, 44, 45, 48, 49, 55, 57, 179, 180, 184, 187,
+             190, 193, 194, 195, 197, 198, 199, 200, 201, 203, 209, 210, 215,
+             236, 237, 238, 239, 296, 301, 317, 328, 329, 330, 334]
+
+    fo4_z_offset = 2.78
 
     @staticmethod
     def get_vtx_pos(object_name, apply_ignore_list=False, with_key=False):
@@ -351,7 +360,7 @@ class LerpTool(object):
         if not mesh:
             return None
 
-        ignore_list = LerpTool.get_ignore_list() if apply_ignore_list else []
+        ignore_list = LerpTool._get_ignore_list() if apply_ignore_list else []
 
         result = [] if not with_key else {}
         mesh = mesh[0]
@@ -393,81 +402,157 @@ class LerpTool(object):
         return [dx, dy, dz]
 
     @staticmethod
+    def _read_key_feature_data():
+        data_file_path = "{}/mapping_table/key_features.json".format(
+            Tool.Instance.package_path)
+
+        parsed_data = None
+        with open(data_file_path, 'r') as fp:
+            parsed_data = json.loads(fp.read())
+        return parsed_data
+
+    @staticmethod
     def lerp(src, dst, step):
         """
         wrapping for conveniently change algorithms
         """
 
-        # LerpTool._simple_index_based_lerp(src, dst, step)
-        # LerpTool._distance_based_lerp(src, dst, step, tolerance=0.001)
-        LerpTool._relationship_based_lerp(src, dst, step)
+        # select algorithm
+
+        # LerpTool._distance_based_lerp(src, dst, step)
+        # LerpTool._distance_based_compete_lerp(src, dst, step)
+        # LerpTool._relationship_based_lerp_closest_key(src, dst, step)
+        # LerpTool._relationship_based_stochastic_spider_lerp(src, dst, step)
+        # LerpTool._keymap_based_reactive_lerp(src, dst, step)
+        print("DEPRECATED!")
 
     @staticmethod
-    def _simple_index_based_lerp(src, dst, step):
-        """
-        dst decides src target by simple index
-        """
-
-        src_vtx = LerpTool.get_vtx_pos(src)
-        dst_vtx = LerpTool.get_vtx_pos(dst, True)
-
-        for idx, src_pos in enumerate(src_vtx):
-            dst_pos = dst_vtx[int(idx)]
-
-            # translate dst vtx to src vtx
-            cmds.xform(
-                "{}.vtx[{}]".format(dst, idx),
-                t=LerpTool.lerp_pos(src_pos, dst_pos, step),
-                relative=False)
-
-    @staticmethod
-    def _distance_based_lerp(src, dst, step, tolerance):
+    def _distance_based_lerp(src, dst, step):
         """
         dst decides src target by most similar local position
         """
 
-        src_vtx = LerpTool.get_vtx_pos(src)
-        dst_vtx = LerpTool.get_vtx_pos(dst)
+        src_vtx = LerpTool.get_vtx_pos(src, apply_ignore_list=False)
+        dst_vtx = LerpTool.get_vtx_pos(dst, apply_ignore_list=True, with_key=True)
 
-        def get_closest_dst_pos(pos):
-            closest_vt = dst_vtx[0]
-            closest_d = LerpTool.distance_sqr(pos, closest_vt)
-            for idx, dst_vt in enumerate(src_vtx):
-                d = LerpTool.distance_sqr(pos, dst_vt)
+        def get_closest_dst_pos(dst_pos):
+            closest_pos = src_vtx[0]
+            closest_d = LerpTool.distance_sqr(dst_pos, closest_pos)
+            for src_pos in src_vtx[1:]:
+                d = LerpTool.distance_sqr(dst_pos, src_pos)
                 if d < closest_d:
                     closest_d = d
-                    closest_vt = dst_vt
+                    closest_pos = src_pos
 
-            return closest_vt, closest_d
+            return closest_pos
 
-        for idx, dst_pos in enumerate(dst_vtx):
-            src_pos, sqr_d = get_closest_dst_pos(dst_pos)
-
-            # skip if already close enough
-            if sqr_d < tolerance * tolerance:
-                continue
+        for idx, dst_pos in dst_vtx.items():
+            src_pos = get_closest_dst_pos(dst_pos)
+            target_pos = LerpTool.lerp_pos(src_pos, dst_pos, step)
 
             # translate dst vtx to src vtx
             cmds.xform(
                 "{}.vtx[{}]".format(dst, idx),
-                t=LerpTool.lerp_pos(src_pos, dst_pos, step),
+                t=target_pos,
                 relative=False)
 
     @staticmethod
-    def _relationship_based_lerp(src, dst, step):
-        def read_key_feature_data():
-            data_file_path = "{}/mapping_table/key_features.json".format(
-                Tool.Instance.package_path)
+    def _distance_based_compete_lerp(src, dst, step):
+        """
+        dst decides src target by most similar local position
+        """
 
-            parsed_data = None
-            with open(data_file_path, 'r') as fp:
-                parsed_data = json.loads(fp.read())
-            return parsed_data
+        src_vtx = LerpTool.get_vtx_pos(src, apply_ignore_list=False, with_key=True)
+        dst_vtx = LerpTool.get_vtx_pos(dst, apply_ignore_list=True, with_key=True)
+
+        # key: src_key
+        # value: [dst_key, dst_key, dst_key, ...]
+        src_to_dst_compete_map = {}
+
+        def get_closest_keys(dst_pos, pool, count=1):
+            if not pool:
+                return [None]
+
+            buff = []
+            for src_key in pool:
+                src_pos = src_vtx[src_key]
+                buff.append((src_key, src_pos))
+
+            return map(lambda x: x[0], sorted(
+                buff,
+                key=lambda x:
+                    LerpTool.distance_sqr(dst_pos, x[1]))[:count])
+
+        dst_iter = dst_vtx.items()
+        for dst_key, dst_pos in dst_iter:
+
+            # get closest_key
+            closest_src_key = get_closest_keys(dst_pos, src_vtx.keys(), 1)[0]
+
+            if closest_src_key not in src_to_dst_compete_map:
+                src_to_dst_compete_map[closest_src_key] = []
+            src_to_dst_compete_map[closest_src_key].append(dst_key)
+
+        handled_src_keys = []
+        while src_to_dst_compete_map:
+            unused_keys = list(filter(
+                lambda x:
+                    x not in src_to_dst_compete_map.keys() and
+                    x not in handled_src_keys,
+                    src_vtx.keys()))
+
+            keys_to_pop = []
+            for src_key, dst_keys in src_to_dst_compete_map.items():
+                if not dst_keys:
+                    continue
+
+                if len(dst_keys) == 1:
+                    cmds.xform(
+                        "{}.vtx[{}]".format(dst, dst_keys[0]),
+                        t=src_vtx[src_key],
+                        relative=False)
+                    keys_to_pop.append(src_key)
+                    continue
+
+                src_pos = src_vtx[src_key]
+
+                most_dst_key = get_closest_keys(src_pos, dst_keys, 1)[0]
+
+                cmds.xform(
+                    "{}.vtx[{}]".format(dst, most_dst_key),
+                    t=src_pos,
+                    relative=False)
+
+                for dst_key in dst_keys:
+                    if dst_key == most_dst_key:
+                        continue
+
+                    dst_pos = dst_vtx[dst_key]
+                    alt_src_key = get_closest_keys(dst_pos, unused_keys, 1)[0]
+                    if not alt_src_key:
+                        break
+
+                    if alt_src_key not in src_to_dst_compete_map:
+                        src_to_dst_compete_map[alt_src_key] = []
+                    src_to_dst_compete_map[alt_src_key].append(dst_key)
+
+            for key in keys_to_pop:
+                src_to_dst_compete_map.pop(key, None)
+                handled_src_keys.append(key)
+                print("  popped key: {}".format(key))
+
+    @staticmethod
+    def _relationship_based_lerp_closest_key(src, dst, step):
+        """
+        [DEPRECATED]
+        select closest key feature, and move by key feature delta
+        this refers mapping table
+        """
 
         # move key_features
         applied_keys = {}
-        key_features = read_key_feature_data()
-        ignore_list = LerpTool.get_ignore_list()
+        key_features = LerpTool._read_key_feature_data()
+        ignore_list = LerpTool._get_ignore_list()
         for dst_key, src_key in key_features.items():
             if dst_key in ignore_list:
                 continue
@@ -479,16 +564,19 @@ class LerpTool(object):
                 "{}.vtx[{}]".format(src, src_key),
                 ws=False, q=True, t=True, a=True)
 
+            target_pos = LerpTool.lerp_pos(src_pos, dst_pos, step)
+            target_pos[2] += LerpTool.fo4_z_offset
+
             # translate dst vtx to src vtx
             cmds.xform(
                 "{}.vtx[{}]".format(dst, dst_key),
-                t=LerpTool.lerp_pos(src_pos, dst_pos, step),
+                t=target_pos,
                 relative=False)
-            applied_keys[dst_key] = dst_pos
+            applied_keys[dst_key] = src_pos
 
         # move others
         dst_vtx = LerpTool.get_vtx_pos(dst, apply_ignore_list=True, with_key=True)
-        src_vtx = LerpTool.get_vtx_pos(src, with_key=True)
+        src_vtx = LerpTool.get_vtx_pos(src, apply_ignore_list=False, with_key=True)
 
         # calculate based on relationship with key_feature
         for dst_key, dst_pos in dst_vtx.items():
@@ -497,9 +585,9 @@ class LerpTool(object):
             if dst_key in applied_keys.keys():
                 continue
 
-            closest_dst_key = None
-            closest_src_key = None
-            closest_d = None
+            closest_dst_key = key_features.keys()[0]
+            closest_src_key = key_features.values()[0]
+            closest_d = LerpTool.distance_sqr(dst_pos, src_vtx[closest_src_key])
             for feat_dst_key, feat_src_key in key_features.items():
                 calc_feat_src_pos = src_vtx[feat_src_key]
                 dist_sqr = LerpTool.distance_sqr(dst_pos, calc_feat_src_pos)
@@ -527,6 +615,102 @@ class LerpTool(object):
                 t=target_pos,
                 relative=False)
 
+    @staticmethod
+    def _relationship_based_stochastic_spider_lerp(src, dst, step):
+        """
+        src: source FO3 mesh
+        dst: destination FO4 mesh
+        """
+
+        dst_vtx = LerpTool.get_vtx_pos(dst, apply_ignore_list=True, with_key=True)
+        src_vtx = LerpTool.get_vtx_pos(src, apply_ignore_list=False, with_key=True)
+
+        dst_keys = dst_vtx.keys()
+        src_keys = src_vtx.keys()
+
+        def get_closest_key(pos, pool, count=1):
+            return sorted(pool.keys(), key=lambda key: LerpTool.distance_sqr(pos, pool[key]))[:count]
+
+        spider_con = {}
+        for dst_key, src_key in zip(dst_keys, src_keys):
+            spider_con[dst_key] = src_key
+
+        # Debug
+        def evaluate_spider_variance():
+            dst_keys = spider_con.keys()
+            src_keys = spider_con.values()
+
+            dst_poss = map(lambda x: dst_vtx[x], dst_keys)
+            src_poss = map(lambda x: src_vtx[x], src_keys)
+
+            # calculate distances
+            distances = []
+            for dst_pos, src_pos in zip(dst_poss, src_poss):
+                distances.append(LerpTool.distance_sqr(dst_pos, src_pos))
+
+            # return variance
+            n = len(distances)
+            return (sum([x * x for x in distances]) / n) - \
+                math.pow(sum(distances) / n, 2)
+
+        def spider_advance():
+            prev_variance = evaluate_spider_variance()
+
+            suggestion = {}
+            for dst_key, src_key in spider_con.items():
+                dst_pos = dst_vtx[dst_key]
+                closest_src_key = get_closest_key(dst_pos, src_vtx)
+
+                if dst_key not in suggestion:
+                    suggestion[dst_key] = []
+                suggestion[dst_key].append(closest_src_key)
+
+            result_variance = evaluate_spider_variance()
+            return prev_variance - result_variance
+
+        print("reduced {} variance".format(spider_advance()))
+
+        # translate
+        for dst_key, src_key in spider_con.items():
+            cmds.xform(
+                "{}.vtx[{}]".format(dst, dst_key),
+                t=src_vtx[src_key],
+                relative=False)
+
+    @staticmethod
+    def reactive_lerp_key_features(src, dst, influence):
+        key_features_data = LerpTool._read_key_feature_data()
+
+        dst_vtx = LerpTool.get_vtx_pos(dst, apply_ignore_list=True, with_key=True)
+        src_vtx = LerpTool.get_vtx_pos(src, apply_ignore_list=False, with_key=True)
+
+        def get_uri_vtx(obj, idx):
+            return "{}.vtx[{}]".format(obj, idx)
+
+        def get_closest_key(pos, vtx, count=1):
+            return sorted(
+                vtx.keys(),
+                key=lambda key:
+                    LerpTool.distance_sqr(pos, vtx[key]))[:count]
+
+        for dst_key, src_key in key_features_data.items():
+            dst_pos = dst_vtx[dst_key]
+            src_pos = src_vtx[src_key]
+
+            dx = dst_pos[0] - src_pos[0]
+            dy = dst_pos[1] - src_pos[1]
+            dz = dst_pos[2] - src_pos[2]
+
+            cmds.xform(
+                get_uri_vtx(dst, dst_key),
+                t=src_pos,
+                relative=False)
+
+            for inf_key in get_closest_key(dst_pos, dst_vtx, influence):
+                inf_pos = dst_vtx[inf_key]
+
+                break
+
 
 class LerpToolHandler(QtGui.QGroupBox):
 
@@ -534,9 +718,7 @@ class LerpToolHandler(QtGui.QGroupBox):
 
     @property
     def step(self):
-        if not self.step_sb:
-            return None
-        return float(self.step_sb.value()) / 1000.
+        return 1.0
 
     def start(self):
         self.setTitle(u"이동")
@@ -544,56 +726,46 @@ class LerpToolHandler(QtGui.QGroupBox):
         self.mainlayout = QtGui.QVBoxLayout()
 
         self.desc_l = QtGui.QLabel()
+
         self.desc_l.setText(
             u"가져온 템플릿의 버텍스들을 \n" +
-            u"선택된 FO3 소스의 메쉬 모양으로 조금씩 이동시킵니다.")
+            u"선택된 FO3 소스의 메쉬 모양으로 이동시킵니다.")
         self.mainlayout.addWidget(self.desc_l)
 
         self.mainlayout.addSpacing(15)
 
-        # progress bar
         step_widget = QtGui.QWidget()
         self.mainlayout.addWidget(step_widget)
-
         step_layout = QtGui.QHBoxLayout()
         step_widget.setLayout(step_layout)
 
-        step_layout.addWidget(QtGui.QLabel(u"스텝"))
+        step_layout.addWidget(QtGui.QLabel(u"영향력 점수"))
 
-        self.step_sb = QtGui.QSlider()
-        self.step_sb.setOrientation(QtCore.Qt.Orientation.Horizontal)
-        self.step_sb.setRange(1, 1000)
-        self.step_sb.setValue(1000)
-        step_layout.addWidget(self.step_sb)
+        self.key_feature_influence_s = QtGui.QSlider()
+        self.key_feature_influence_s.setRange(1, 100)
+        self.key_feature_influence_s.setValue(30)
+        self.key_feature_influence_s.setOrientation(QtCore.Qt.Horizontal)
+        step_layout.addWidget(self.key_feature_influence_s)
 
-        self.preview_value_l = QtGui.QLabel(
-            "{:.3f}".format(self.step))
-        self.step_sb.valueChanged.connect(
-            lambda v: self.preview_value_l.setText(
-                "{:.3f}".format(self.step)
-            ))
-        step_layout.addWidget(self.preview_value_l)
+        slider_value = QtGui.QLabel("30")
+        self.key_feature_influence_s.valueChanged.connect(
+            lambda x: slider_value.setText(str(x)))
+        step_layout.addWidget(slider_value)
 
-        self.exec_btn = QtGui.QPushButton()
-        self.exec_btn.setText(u"실행")
-        self.exec_btn.clicked.connect(self.run)
-        self.mainlayout.addWidget(self.exec_btn)
+        self.translate_key_features_btn = QtGui.QPushButton()
+        self.translate_key_features_btn.setText(u"키 피쳐 이동")
+        self.translate_key_features_btn.clicked.connect(self.translate_key_features)
+        self.mainlayout.addWidget(self.translate_key_features_btn)
 
         self.setLayout(self.mainlayout)
 
-    def run(self, e=False):
+    def translate_key_features(self, e=False):
         src = Tool.Instance.source_name
         dst = Tool.Instance.target_name
 
-        if not src:
-            print(u"FO3 소스가 필요합니다.")
-            return
-
-        if not dst:
-            print(u"FO4 템플릿이 필요합니다.")
-            return
-
-        LerpTool.lerp(src, dst, self.step)
+        LerpTool.reactive_lerp_key_features(
+            src, dst,
+            self.key_feature_influence_s.value())
 
 
 class Tool(object):
